@@ -2,14 +2,14 @@
 
 AI-powered photo curation — instantly surface your best shots.
 
-Upload a folder of photos and ShotlineAI ranks, tags, and captions every image using Gemini vision AI, grouping them into confidence tiers so you can export a clean library in seconds.
+Upload a folder of photos and ShotlineAI ranks, tags, and captions every image using ChatGPT vision AI, grouping them into confidence tiers so you can export a clean library in seconds.
 
 ## Tech Stack
 
 - **Next.js 15** (App Router)
 - **TypeScript**
 - **Tailwind CSS**
-- **Gemini 1.5 Flash** (Google AI vision)
+- **ChatGPT 4o** (Open AI vision)
 - **Zustand** (client-side state)
 - **JSZip** (client-side ZIP export)
 
@@ -23,7 +23,7 @@ npm install
 Edit `.env.local` (already present in repo root):
 
 ```env
-GEMINI_API_KEY=your_gemini_api_key_here
+OPEN_AI_API=your_openai_api_key_here
 NEXT_PUBLIC_MOCK_MODE=false
 ```
 
