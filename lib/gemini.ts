@@ -1,9 +1,8 @@
-// Gemini API client — server-side only (/api/analyze route).
-// Sends up to 5 images per call with inline base64 data.
-// Returns raw Gemini output shape (not mapped to AnalysisResult).
-// Retries once on JSON parse failure before returning per-image fallbacks.
+// AI analysis client — server-side only (/api/analyze route).
+// Uses OpenAI GPT-4o vision to rank, tag, and caption each image batch.
+// Exports the same interface as before so the route and hooks are unchanged.
 
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import OpenAI from "openai";
 import { SYSTEM_PROMPT, buildOpeningText, buildImageLabel, buildClosingText } from "./prompts";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -30,40 +29,35 @@ export interface GeminiRawResult {
 export function fallbackResult(id: string): GeminiRawResult {
   return {
     id,
-    decision: "keep",
-    confidence: 50,
-    quality_tags: [],
+    decision:          "keep",
+    confidence:        50,
+    quality_tags:      [],
     organization_tags: [],
-    caption: "",
-    reasoning: "Analysis unavailable",
+    caption:           "",
+    reasoning:         "Analysis unavailable",
   };
 }
 
-// ─── Model factory ────────────────────────────────────────────────────────────
+// Short proxy IDs sent to the model instead of full UUIDs.
+const proxyId = (i: number) => `img_${i + 1}`;
 
-function getModel() {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY environment variable is not set");
+// ─── Client factory ───────────────────────────────────────────────────────────
 
-  const genAI = new GoogleGenerativeAI(apiKey);
-  return genAI.getGenerativeModel({
-    model: "gemini-1.5-flash",
-    systemInstruction: SYSTEM_PROMPT,
-    generationConfig: {
-      temperature: 0.2,
-      responseMimeType: "application/json",
-      maxOutputTokens: 1500,
-    },
-  });
+function getClient(): OpenAI {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY environment variable is not set");
+  return new OpenAI({ apiKey });
 }
 
 // ─── Single API call ──────────────────────────────────────────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function callModel(images: GeminiImageInput[]): Promise<string> {
-  const model = getModel();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const parts: any[] = [{ text: buildOpeningText(images.length) }];
+  const client = getClient();
+
+  // Build the user message: opening text + interleaved image+label pairs + closing schema
+  const content: OpenAI.Chat.ChatCompletionContentPart[] = [];
+
+  content.push({ type: "text", text: buildOpeningText(images.length) });
 
   for (let i = 0; i < images.length; i++) {
     const img = images[i];
@@ -71,71 +65,106 @@ async function callModel(images: GeminiImageInput[]): Promise<string> {
     if (img.likely_blurry) hints.push("likely blurry");
     if (img.likely_dark)   hints.push("likely underexposed");
 
-    parts.push({ text: buildImageLabel(i, img.id, hints) });
-    parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } });
+    content.push({ type: "text", text: buildImageLabel(i, proxyId(i), hints) });
+    content.push({
+      type:      "image_url",
+      image_url: {
+        url:    `data:${img.mimeType};base64,${img.base64}`,
+        detail: "auto", // "high" for large images, "low" for small — lets model judge blur/exposure properly
+      },
+    });
   }
 
-  parts.push({ text: buildClosingText(images.length) });
+  content.push({ type: "text", text: buildClosingText(images.length) });
 
-  const response = await model.generateContent(parts);
-  return response.response.text();
+  const response = await client.chat.completions.create({
+    model:       "gpt-4o",  // best vision quality — mini is too conservative on scores
+    max_tokens:  4096,
+    temperature: 0.4,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user",   content },
+    ],
+  });
+
+  return response.choices[0]?.message?.content ?? "";
 }
 
 // ─── Response parsing ─────────────────────────────────────────────────────────
 
-// Returns null if the text cannot be parsed into a valid results array.
-// Strips ``` fences before attempting JSON.parse.
 function tryParse(
   raw: string,
   images: GeminiImageInput[]
 ): GeminiRawResult[] | null {
-  // Strip markdown code fences Gemini occasionally wraps around JSON
-  const cleaned = raw
-    .trim()
+  const cleaned = raw.trim()
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/\s*```\s*$/, "");
 
-  let parsed: { results?: unknown[] };
-
+  let parsed: unknown;
   try {
     parsed = JSON.parse(cleaned);
   } catch {
-    // Last-resort: extract the outermost JSON object
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (!match) return null;
-    try {
-      parsed = JSON.parse(match[0]);
-    } catch {
-      return null;
+    const objMatch = cleaned.match(/\{[\s\S]*\}/);
+    const arrMatch = cleaned.match(/\[[\s\S]*\]/);
+    const fragment = objMatch ?? arrMatch;
+    if (!fragment) return null;
+    try { parsed = JSON.parse(fragment[0]); } catch { return null; }
+  }
+
+  // Accept { results: [...] }, a bare array, or any object whose first array value is the list
+  let resultsArr: unknown[];
+  if (Array.isArray(parsed)) {
+    resultsArr = parsed;
+  } else if (parsed && typeof parsed === "object") {
+    const obj = parsed as Record<string, unknown>;
+    if (Array.isArray(obj.results)) {
+      resultsArr = obj.results;
+    } else {
+      const first = Object.values(obj).find(Array.isArray) as unknown[] | undefined;
+      resultsArr = first ?? [];
     }
+  } else {
+    resultsArr = [];
   }
 
-  if (!Array.isArray(parsed?.results) || parsed.results.length === 0) return null;
+  if (resultsArr.length === 0) return null;
 
-  // Build id → result map; unknown or malformed entries get fallbacks
+  const validated = resultsArr.map(validateResult);
+
   const byId = new Map<string, GeminiRawResult>();
-  for (const r of parsed.results) {
-    const validated = validateResult(r);
-    if (validated) byId.set(validated.id, validated);
+  for (const r of validated) {
+    if (r) byId.set(r.id, r);
   }
 
-  return images.map((img) => byId.get(img.id) ?? fallbackResult(img.id));
+  const positional = validated.filter((r): r is GeminiRawResult => r !== null);
+
+  return images.map((img, i) => {
+    const match =
+      byId.get(proxyId(i)) ??
+      byId.get(img.id) ??
+      (positional.length === images.length ? positional[i] : undefined);
+    return match ? { ...match, id: img.id } : fallbackResult(img.id);
+  });
 }
 
 function validateResult(r: unknown): GeminiRawResult | null {
   if (!r || typeof r !== "object") return null;
   const o = r as Record<string, unknown>;
-  if (typeof o.id !== "string" || !o.id) return null;
+
+  const rawId = o.id;
+  const id = typeof rawId === "string" ? rawId
+            : typeof rawId === "number" ? String(rawId)
+            : null;
+  if (!id) return null;
 
   const VALID = ["best", "keep", "uncertain", "reject"] as const;
-  const decision: GeminiRawResult["decision"] = VALID.includes(
-    o.decision as (typeof VALID)[number]
-  )
+  const decision: GeminiRawResult["decision"] = VALID.includes(o.decision as typeof VALID[number])
     ? (o.decision as GeminiRawResult["decision"])
     : "keep";
 
   return {
-    id: o.id,
+    id,
     decision,
     confidence:
       typeof o.confidence === "number"
@@ -152,6 +181,23 @@ function validateResult(r: unknown): GeminiRawResult | null {
   };
 }
 
+// ─── Rate-limit helpers ───────────────────────────────────────────────────────
+
+function retryDelayMs(err: unknown): number | null {
+  // OpenAI rate-limit errors expose a retryAfter header value
+  const e = err as Record<string, unknown>;
+  if (typeof e?.headers === "object") {
+    const after = (e.headers as Record<string, string>)["retry-after"];
+    if (after) return (parseInt(after, 10) + 2) * 1000;
+  }
+  return null;
+}
+
+function is429(err: unknown): boolean {
+  return (err as Record<string, unknown>)?.status === 429 ||
+    String(err).includes("429");
+}
+
 // ─── Public entry point ───────────────────────────────────────────────────────
 
 export async function analyzeBatch(
@@ -162,26 +208,43 @@ export async function analyzeBatch(
     throw new Error(`analyzeBatch: max 5 images per call, got ${images.length}`);
   }
 
-  // First attempt
   let raw: string;
   try {
     raw = await callModel(images);
+    console.log("[openai] raw response (first 400 chars):", raw.slice(0, 400));
   } catch (err) {
-    console.error("[gemini] API call failed:", err);
-    return images.map((img) => fallbackResult(img.id));
+    if (is429(err)) {
+      const wait = retryDelayMs(err) ?? 60_000;
+      console.warn(`[openai] rate-limited — waiting ${wait / 1000}s then retrying`);
+      await new Promise((r) => setTimeout(r, wait));
+      try {
+        raw = await callModel(images);
+      } catch (err2) {
+        console.error("[openai] retry after rate-limit failed:", err2);
+        return images.map((img) => fallbackResult(img.id));
+      }
+    } else {
+      console.error("[openai] API call failed:", err);
+      return images.map((img) => fallbackResult(img.id));
+    }
   }
 
   const first = tryParse(raw, images);
-  if (first) return first;
+  if (first) {
+    console.log("[openai] parsed OK, returning", first.length, "results");
+    return first;
+  }
 
   // Retry once on bad JSON
-  console.warn("[gemini] parse failed on first attempt — retrying");
+  console.warn("[openai] parse failed — retrying. Response was:", raw);
   try {
     raw = await callModel(images);
   } catch (err) {
-    console.error("[gemini] retry failed:", err);
+    console.error("[openai] JSON-retry call failed:", err);
     return images.map((img) => fallbackResult(img.id));
   }
 
-  return tryParse(raw, images) ?? images.map((img) => fallbackResult(img.id));
+  const second = tryParse(raw, images);
+  if (!second) console.error("[openai] parse failed on retry. Response:", raw);
+  return second ?? images.map((img) => fallbackResult(img.id));
 }

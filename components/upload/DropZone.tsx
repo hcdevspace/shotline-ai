@@ -2,31 +2,87 @@
 
 // DropZone — primary file input.
 // Default (compact=false): full centered zone with icon + format hints.
-// Compact (compact=true): slim horizontal strip used when images are already staged,
-//   letting the user add more without dominating the layout.
+// Compact (compact=true): slim horizontal strip used when images are already staged.
+//
+// Folder drag-and-drop uses DataTransferItem.webkitGetAsEntry() so the browser
+// reads directory contents recursively instead of ignoring the folder entirely.
+// Plain file drops and the <input webkitdirectory> click path are unchanged.
 
 import { useRef, useState } from "react";
 
 interface Props {
-  onFiles?: (files: FileList) => void;
+  onFiles?: (files: FileList | File[]) => void;
   compact?: boolean;
 }
+
+// ─── File System API helpers ──────────────────────────────────────────────────
+
+async function readEntry(entry: FileSystemEntry): Promise<File[]> {
+  if (entry.isFile) {
+    return new Promise<File[]>((resolve) => {
+      (entry as FileSystemFileEntry).file(
+        (f) => resolve([f]),
+        ()  => resolve([]),
+      );
+    });
+  }
+
+  if (entry.isDirectory) {
+    const reader = (entry as FileSystemDirectoryEntry).createReader();
+    const allEntries: FileSystemEntry[] = [];
+
+    // readEntries returns ≤100 entries per call — loop until empty
+    let batch: FileSystemEntry[];
+    do {
+      batch = await new Promise<FileSystemEntry[]>((resolve, reject) =>
+        reader.readEntries(resolve, reject),
+      );
+      allEntries.push(...batch);
+    } while (batch.length > 0);
+
+    const nested = await Promise.all(allEntries.map(readEntry));
+    return nested.flat();
+  }
+
+  return [];
+}
+
+async function getDroppedFiles(dt: DataTransfer): Promise<File[]> {
+  // Prefer the File System API — required for folder drops
+  if (dt.items?.length > 0) {
+    const entries: FileSystemEntry[] = [];
+    for (let i = 0; i < dt.items.length; i++) {
+      const entry = dt.items[i].webkitGetAsEntry?.();
+      if (entry) entries.push(entry);
+    }
+    if (entries.length > 0) {
+      const nested = await Promise.all(entries.map(readEntry));
+      return nested.flat();
+    }
+  }
+
+  // Fallback: plain files dropped (no folder)
+  return Array.from(dt.files);
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export default function DropZone({ onFiles, compact = false }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  function handleDrop(e: React.DragEvent) {
+  async function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     setIsDragging(false);
-    if (e.dataTransfer.files.length > 0) onFiles?.(e.dataTransfer.files);
+    const files = await getDroppedFiles(e.dataTransfer);
+    if (files.length > 0) onFiles?.(files);
   }
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     if (e.target.files && e.target.files.length > 0) onFiles?.(e.target.files);
   }
 
-  // ── Compact variant ────────────────────────────────────────────────────────
+  // ── Compact variant ──────────────────────────────────────────────────────────
   if (compact) {
     return (
       <div
@@ -72,7 +128,7 @@ export default function DropZone({ onFiles, compact = false }: Props) {
     );
   }
 
-  // ── Full variant ───────────────────────────────────────────────────────────
+  // ── Full variant ─────────────────────────────────────────────────────────────
   return (
     <div className="w-full max-w-xl">
       <div
@@ -90,7 +146,6 @@ export default function DropZone({ onFiles, compact = false }: Props) {
             : "border-edge bg-surface hover:border-accent/35 hover:bg-elevated"}
         `}
       >
-        {/* Upload icon */}
         <div className={`transition-colors duration-150 ${isDragging ? "text-accent" : "text-mid"}`}>
           <svg
             width="36" height="36"

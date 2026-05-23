@@ -87,11 +87,11 @@ async function compressImage(file: File): Promise<UploadedImage | null> {
   });
 }
 
+const IMAGE_EXTS = /\.(jpe?g|png|webp|heic|heif)$/i;
+
 function isAccepted(file: File): boolean {
-  return (
-    ACCEPTED_TYPES.has(file.type) ||
-    /\.(heic|heif)$/i.test(file.name)
-  );
+  // file.type can be empty string when reading via webkitdirectory on some browsers
+  return ACCEPTED_TYPES.has(file.type) || IMAGE_EXTS.test(file.name);
 }
 
 // ─── Demo image generation ────────────────────────────────────────────────────

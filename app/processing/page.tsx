@@ -54,8 +54,7 @@ const TIMEOUT_MS = 30_000;
 export default function ProcessingPage() {
   const router = useRouter();
   const { reset } = usePhotoStore();
-  const { total, processed, status, currentBatch, totalBatches } =
-    usePhotoAnalysis();
+  const { total, processed, status } = usePhotoAnalysis();
 
   // Rotate display message every 2 s during analysis
   const [rotIdx, setRotIdx] = useState(0);
@@ -86,11 +85,8 @@ export default function ProcessingPage() {
     router.push("/upload");
   }
 
-  const steps        = buildSteps(status);
-  const showBatch    = status === "analyzing" && totalBatches > 0;
-  const displayMsg   = status === "analyzing"
-    ? ROTATE_MSGS[rotIdx]
-    : ROTATE_MSGS[0];
+  const steps      = buildSteps(status);
+  const displayMsg = status === "analyzing" ? ROTATE_MSGS[rotIdx] : ROTATE_MSGS[0];
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[calc(100vh-56px)] px-6">
@@ -110,13 +106,15 @@ export default function ProcessingPage() {
             Analyzing your photos
           </h2>
 
-          {/* Batch counter — prominent when active */}
-          {showBatch && (
+          {/* Photo counter — same scale as the progress bar */}
+          {status === "analyzing" && total > 0 && (
             <p className="text-[15px] font-semibold text-hi mb-1.5">
-              Analyzing batch{" "}
-              <span className="text-accent tabular-nums">{currentBatch}</span>
+              Photo{" "}
+              <span className="text-accent tabular-nums">
+                {Math.min(processed + 1, total)}
+              </span>
               {" "}of{" "}
-              <span className="tabular-nums">{totalBatches}</span>
+              <span className="tabular-nums">{total}</span>
             </p>
           )}
 

@@ -71,6 +71,10 @@ export function usePhotoAnalysis() {
   const [statusMessage, setStatusMessage] = useState(PREPROCESS_MSG);
 
   useEffect(() => {
+    // cancelled flag prevents double-execution in React Strict Mode (dev only),
+    // where effects are intentionally mounted → unmounted → remounted.
+    let cancelled = false;
+
     if (photos.length === 0) {
       router.replace("/upload");
       return;
@@ -96,7 +100,6 @@ export function usePhotoAnalysis() {
       try {
         preprocessed = await preprocessImages(uploadedInputs);
       } catch {
-        // Safe fallback: treat all images as unanalyzed with neutral values
         preprocessed = uploadedInputs.map((img) => ({
           ...img,
           sharpness:     50,
@@ -107,6 +110,8 @@ export function usePhotoAnalysis() {
           cluster_id:    crypto.randomUUID(),
         }));
       }
+
+      if (cancelled) return;
 
       // Annotate clientFiltered (advisory only — AI still sees every image)
       for (const pre of preprocessed) {
@@ -128,6 +133,8 @@ export function usePhotoAnalysis() {
       let anyBatchFailed = false;
 
       for (let i = 0; i < subBatches.length; i++) {
+        if (cancelled) return;
+
         const batchNum = i + 1;
         const isLast   = batchNum === subBatches.length;
 
@@ -148,6 +155,7 @@ export function usePhotoAnalysis() {
 
         try {
           const results = await analyzeCluster(clusterInput);
+          if (cancelled) return;
           for (const r of results) {
             updatePhoto(r.id, { analysisResult: r });
             incrementProcessed();
@@ -159,6 +167,7 @@ export function usePhotoAnalysis() {
           const mockResults = await mockAnalyzeBatch(
             images.map((img) => ({ id: img.id, filename: img.filename }))
           );
+          if (cancelled) return;
           for (const r of mockResults) {
             updatePhoto(r.id, { analysisResult: r });
             incrementProcessed();
@@ -166,6 +175,7 @@ export function usePhotoAnalysis() {
         }
       }
 
+      if (cancelled) return;
       if (anyBatchFailed) setDemoMode(true);
 
       setStatus("done");
@@ -173,10 +183,12 @@ export function usePhotoAnalysis() {
     }
 
     runPipeline();
+    return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps — intentionally once on mount
 
-  const processed = usePhotoStore((s) => s.processedCount);
-  const status    = usePhotoStore((s) => s.status);
+  const processedRaw = usePhotoStore((s) => s.processedCount);
+  const status       = usePhotoStore((s) => s.status);
+  const processed    = Math.min(processedRaw, photos.length);
 
   return {
     total:     photos.length,

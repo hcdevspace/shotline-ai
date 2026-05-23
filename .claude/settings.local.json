@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Bash(Test-Path \"c:\\\\Users\\\\harsh\\\\OneDrive\\\\Desktop\\\\hackathon\\\\.env.local\")",
+      "Bash(Get-Content \"c:\\\\Users\\\\harsh\\\\OneDrive\\\\Desktop\\\\hackathon\\\\.env.local\")",
+      "Bash(npm install *)"
+    ]
+  }
+}
