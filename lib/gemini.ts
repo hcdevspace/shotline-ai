@@ -1,54 +1,187 @@
-// Gemini API client — server-side only (used inside /api/analyze route).
-// Wraps the @google/generative-ai SDK and constructs the scoring prompt.
-// Returns structured AnalysisResult[] parsed from Gemini's JSON response.
-// Never import this file in client components — it reads process.env.GEMINI_API_KEY.
+// Gemini API client — server-side only (/api/analyze route).
+// Sends up to 5 images per call with inline base64 data.
+// Returns raw Gemini output shape (not mapped to AnalysisResult).
+// Retries once on JSON parse failure before returning per-image fallbacks.
 
-import { AnalysisResult, Tier } from "./types";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { SYSTEM_PROMPT, buildOpeningText, buildImageLabel, buildClosingText } from "./prompts";
 
-// TODO: install @google/generative-ai and uncomment
-// import { GoogleGenerativeAI } from "@google/generative-ai";
-
-const SCORING_PROMPT = `
-You are a professional photo curator. Analyze each image and respond with a JSON array.
-For each image return exactly:
-{
-  "id": "<provided id>",
-  "score": <integer 0-100>,
-  "tier": <"best"|"keep"|"uncertain"|"reject">,
-  "tags": [<up to 5 short descriptive tags>],
-  "caption": "<one sentence describing the photo>",
-  "confidence": <float 0.0-1.0>
-}
-
-Scoring guide:
-- best (85–100): sharp, well-lit, compelling composition
-- keep (60–84): good photo with minor flaws
-- uncertain (40–59): usable but questionable quality
-- reject (0–39): blurry, poorly exposed, or technically failed
-
-Return only the JSON array, no other text.
-`.trim();
+// ─── Public types ─────────────────────────────────────────────────────────────
 
 export interface GeminiImageInput {
   id: string;
-  base64: string;
+  filename: string;
+  base64: string;          // raw base64 — no data:... prefix
   mimeType: string;
+  likely_blurry?: boolean;
+  likely_dark?: boolean;
 }
+
+export interface GeminiRawResult {
+  id: string;
+  decision: "best" | "keep" | "uncertain" | "reject";
+  confidence: number;      // 0–100
+  quality_tags: string[];
+  organization_tags: string[];
+  caption: string;
+  reasoning: string;
+}
+
+export function fallbackResult(id: string): GeminiRawResult {
+  return {
+    id,
+    decision: "keep",
+    confidence: 50,
+    quality_tags: [],
+    organization_tags: [],
+    caption: "",
+    reasoning: "Analysis unavailable",
+  };
+}
+
+// ─── Model factory ────────────────────────────────────────────────────────────
+
+function getModel() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY environment variable is not set");
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  return genAI.getGenerativeModel({
+    model: "gemini-1.5-flash",
+    systemInstruction: SYSTEM_PROMPT,
+    generationConfig: {
+      temperature: 0.2,
+      responseMimeType: "application/json",
+      maxOutputTokens: 1500,
+    },
+  });
+}
+
+// ─── Single API call ──────────────────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function callModel(images: GeminiImageInput[]): Promise<string> {
+  const model = getModel();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const parts: any[] = [{ text: buildOpeningText(images.length) }];
+
+  for (let i = 0; i < images.length; i++) {
+    const img = images[i];
+    const hints: string[] = [];
+    if (img.likely_blurry) hints.push("likely blurry");
+    if (img.likely_dark)   hints.push("likely underexposed");
+
+    parts.push({ text: buildImageLabel(i, img.id, hints) });
+    parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } });
+  }
+
+  parts.push({ text: buildClosingText(images.length) });
+
+  const response = await model.generateContent(parts);
+  return response.response.text();
+}
+
+// ─── Response parsing ─────────────────────────────────────────────────────────
+
+// Returns null if the text cannot be parsed into a valid results array.
+// Strips ``` fences before attempting JSON.parse.
+function tryParse(
+  raw: string,
+  images: GeminiImageInput[]
+): GeminiRawResult[] | null {
+  // Strip markdown code fences Gemini occasionally wraps around JSON
+  const cleaned = raw
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/, "");
+
+  let parsed: { results?: unknown[] };
+
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    // Last-resort: extract the outermost JSON object
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      parsed = JSON.parse(match[0]);
+    } catch {
+      return null;
+    }
+  }
+
+  if (!Array.isArray(parsed?.results) || parsed.results.length === 0) return null;
+
+  // Build id → result map; unknown or malformed entries get fallbacks
+  const byId = new Map<string, GeminiRawResult>();
+  for (const r of parsed.results) {
+    const validated = validateResult(r);
+    if (validated) byId.set(validated.id, validated);
+  }
+
+  return images.map((img) => byId.get(img.id) ?? fallbackResult(img.id));
+}
+
+function validateResult(r: unknown): GeminiRawResult | null {
+  if (!r || typeof r !== "object") return null;
+  const o = r as Record<string, unknown>;
+  if (typeof o.id !== "string" || !o.id) return null;
+
+  const VALID = ["best", "keep", "uncertain", "reject"] as const;
+  const decision: GeminiRawResult["decision"] = VALID.includes(
+    o.decision as (typeof VALID)[number]
+  )
+    ? (o.decision as GeminiRawResult["decision"])
+    : "keep";
+
+  return {
+    id: o.id,
+    decision,
+    confidence:
+      typeof o.confidence === "number"
+        ? Math.min(100, Math.max(0, Math.round(o.confidence)))
+        : 50,
+    quality_tags: Array.isArray(o.quality_tags)
+      ? (o.quality_tags as unknown[]).filter((t): t is string => typeof t === "string")
+      : [],
+    organization_tags: Array.isArray(o.organization_tags)
+      ? (o.organization_tags as unknown[]).filter((t): t is string => typeof t === "string")
+      : [],
+    caption:   typeof o.caption   === "string" ? o.caption   : "",
+    reasoning: typeof o.reasoning === "string" ? o.reasoning : "",
+  };
+}
+
+// ─── Public entry point ───────────────────────────────────────────────────────
 
 export async function analyzeBatch(
   images: GeminiImageInput[]
-): Promise<AnalysisResult[]> {
-  // TODO: implement real Gemini call
-  // const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-  // const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-  // const parts = images.flatMap(img => [
-  //   { text: `Image id: ${img.id}` },
-  //   { inlineData: { mimeType: img.mimeType, data: img.base64 } }
-  // ]);
-  // parts.push({ text: SCORING_PROMPT });
-  // const result = await model.generateContent(parts);
-  // const json = result.response.text().replace(/```json|```/g, "").trim();
-  // return JSON.parse(json) as AnalysisResult[];
+): Promise<GeminiRawResult[]> {
+  if (images.length === 0) return [];
+  if (images.length > 5) {
+    throw new Error(`analyzeBatch: max 5 images per call, got ${images.length}`);
+  }
 
-  throw new Error("Gemini client not yet implemented — use mock mode");
+  // First attempt
+  let raw: string;
+  try {
+    raw = await callModel(images);
+  } catch (err) {
+    console.error("[gemini] API call failed:", err);
+    return images.map((img) => fallbackResult(img.id));
+  }
+
+  const first = tryParse(raw, images);
+  if (first) return first;
+
+  // Retry once on bad JSON
+  console.warn("[gemini] parse failed on first attempt — retrying");
+  try {
+    raw = await callModel(images);
+  } catch (err) {
+    console.error("[gemini] retry failed:", err);
+    return images.map((img) => fallbackResult(img.id));
+  }
+
+  return tryParse(raw, images) ?? images.map((img) => fallbackResult(img.id));
 }

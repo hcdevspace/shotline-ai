@@ -1,41 +1,65 @@
-// Analysis service — the single decision point between mock and real AI.
-// Checks NEXT_PUBLIC_MOCK_MODE at runtime and routes to either:
-//   - mockAnalyzeBatch (utils/mockData.ts) — deterministic fake results
-//   - POST /api/analyze — real Gemini call via the server route
-// No other file in the app should make this decision.
+// Analysis service — thin HTTP wrapper around POST /api/analyze.
+// Accepts a single pre-formed cluster, sends it as { clusters: [cluster] },
+// and maps the raw API response (decision/confidence/quality_tags/…) to
+// the AnalysisResult shape used everywhere else in the app.
+// Does NOT know about mock mode — that decision lives in the API route.
 
-import { AnalysisResult } from "@/lib/types";
-import { mockAnalyzeBatch } from "./mockData";
+import { AnalysisResult, Tier } from "@/lib/types";
 
-const IS_MOCK = process.env.NEXT_PUBLIC_MOCK_MODE === "true";
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-export interface ServiceImageInput {
-  id: string;
-  filename: string;
-  base64: string;
-  mimeType: string;
+export interface ClusterInput {
+  cluster_id: string;
+  images: Array<{
+    id: string;
+    filename: string;
+    base64: string;
+    likely_blurry?: boolean;
+    likely_dark?: boolean;
+  }>;
 }
 
-export async function analyzeBatch(
-  images: ServiceImageInput[]
-): Promise<AnalysisResult[]> {
-  if (IS_MOCK) {
-    return mockAnalyzeBatch(images.map((img) => ({ id: img.id, filename: img.filename })));
-  }
+interface RawResult {
+  id: string;
+  decision: "best" | "keep" | "uncertain" | "reject";
+  confidence: number;        // 0–100 (integer from Gemini)
+  quality_tags: string[];
+  organization_tags: string[];
+  caption: string;
+  reasoning: string;
+}
 
-  // Real path: call the Next.js API route (keeps API key server-side)
+// ─── Mapping ──────────────────────────────────────────────────────────────────
+
+function mapRaw(r: RawResult): AnalysisResult {
+  const score = Math.min(100, Math.max(0, Math.round(r.confidence ?? 50)));
+  return {
+    id:         r.id,
+    score,
+    tier:       (r.decision ?? "uncertain") as Tier,
+    tags:       [...(r.quality_tags ?? []), ...(r.organization_tags ?? [])],
+    caption:    r.caption   ?? "",
+    confidence: score / 100,
+    reasoning:  r.reasoning ?? "",
+  };
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+export async function analyzeCluster(
+  cluster: ClusterInput
+): Promise<AnalysisResult[]> {
   const res = await fetch("/api/analyze", {
-    method: "POST",
+    method:  "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      images: images.map(({ id, base64, mimeType }) => ({ id, base64, mimeType })),
-    }),
+    body:    JSON.stringify({ clusters: [cluster] }),
   });
 
   if (!res.ok) {
-    throw new Error(`/api/analyze responded with ${res.status}`);
+    const text = await res.text().catch(() => "");
+    throw new Error(`/api/analyze ${res.status}: ${text}`);
   }
 
-  const data = await res.json();
-  return data.results as AnalysisResult[];
+  const data: { results: RawResult[] } = await res.json();
+  return data.results.map(mapRaw);
 }

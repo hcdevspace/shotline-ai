@@ -1,28 +1,107 @@
-/* Global styles for ShotlineAI.
-   Tailwind base + a few custom utilities used across the app. */
+/* ShotlineAI global stylesheet.
+   Defines the full design-system token set via Tailwind v4 @theme,
+   base resets, keyframe animations, and scrollbar styling.
+   All color tokens here are the single source of truth — no other
+   file should hardcode hex values. */
 
 @import "tailwindcss";
 
-:root {
-  --background: #0a0a0f;
-  --surface: #13131a;
-  --surface-raised: #1c1c26;
-  --border: #2a2a3a;
-  --text-primary: #f0f0f5;
-  --text-secondary: #8888a8;
-  --accent: #6c63ff;
-  --accent-hover: #8178ff;
+/* ─── Design tokens ─────────────────────────────────────── */
+@theme {
+  /* Backgrounds */
+  --color-canvas:   #0A0A0A;   /* page bg      */
+  --color-surface:  #141414;   /* card bg      */
+  --color-elevated: #1E1E1E;   /* hover/modal  */
+  --color-edge:     #2A2A2A;   /* borders/track */
+
+  /* Accent */
+  --color-accent:     #E8FF47;
+  --color-accent-dim: #D4EB30;
+
+  /* Text scale */
+  --color-hi:  #F5F5F5;   /* primary   */
+  --color-mid: #888888;   /* secondary */
+  --color-lo:  #555555;   /* muted     */
+
+  /* Confidence tiers */
+  --color-best:      #4ADE80;
+  --color-keep:      #FACC15;
+  --color-uncertain: #FB923C;
+  --color-reject:    #F87171;
+}
+
+/* ─── Base ───────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
 }
 
 body {
-  background-color: var(--background);
-  color: var(--text-primary);
-  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  background-color: #0A0A0A;
+  color: #F5F5F5;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Thin scrollbar for result grids */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: var(--surface); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+/* ─── Keyframes ──────────────────────────────────────────── */
+
+/* Page fade — 200ms, wrap <main> */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Card entry — stagger via animation-delay on each card */
+@keyframes cardIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Confidence bar fill — animates from 0 to the element's own width */
+@keyframes barFill {
+  from { width: 0; }
+}
+
+/* ─── Animation utility classes ──────────────────────────── */
+.animate-page-in {
+  animation: fadeIn 200ms ease-out both;
+}
+
+.animate-card-in {
+  animation: cardIn 300ms ease-out both;
+}
+
+.animate-bar {
+  animation: barFill 600ms ease-out both;
+}
+
+/* Honor user motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  .animate-page-in,
+  .animate-card-in,
+  .animate-bar,
+  .animate-spin {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+    width: revert !important;
+  }
+  /* Snap all transitions to instant so hover states still work, just don't animate */
+  .transition-opacity,
+  .transition-transform,
+  .transition-colors,
+  .transition-all {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ─── Scrollbar ──────────────────────────────────────────── */
+::-webkit-scrollbar          { width: 5px; height: 5px; }
+::-webkit-scrollbar-track    { background: #141414; }
+::-webkit-scrollbar-thumb    { background: #2A2A2A; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #383838; }

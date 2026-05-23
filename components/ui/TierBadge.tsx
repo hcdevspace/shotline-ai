@@ -1,15 +1,14 @@
-// TierBadge — color-coded pill showing the confidence tier of a photo.
-// Used on PhotoCard and in the results summary header.
-// Colors are intentionally distinct for rapid visual scanning:
-//   best=purple, keep=green, uncertain=amber, reject=red
+// TierBadge — small uppercase pill labeling the confidence tier.
+// Background is a 15% opacity tint of the tier color.
+// Spec: 11px, font-weight 600, uppercase, letter-spacing 0.08em, border-radius 4px.
 
 import { Tier } from "@/lib/types";
 
-const TIER_STYLES: Record<Tier, { bg: string; text: string; label: string }> = {
-  best:      { bg: "bg-violet-500/20", text: "text-violet-300",  label: "Best" },
-  keep:      { bg: "bg-emerald-500/20", text: "text-emerald-300", label: "Keep" },
-  uncertain: { bg: "bg-amber-500/20",  text: "text-amber-300",   label: "Uncertain" },
-  reject:    { bg: "bg-red-500/20",    text: "text-red-400",     label: "Reject" },
+const TIER_CONFIG: Record<Tier, { bg: string; color: string; label: string }> = {
+  best:      { bg: "rgba(74,  222, 128, 0.15)", color: "#4ADE80", label: "BEST" },
+  keep:      { bg: "rgba(250, 204,  21, 0.15)", color: "#FACC15", label: "KEEP" },
+  uncertain: { bg: "rgba(251, 146,  60, 0.15)", color: "#FB923C", label: "UNCERTAIN" },
+  reject:    { bg: "rgba(248, 113, 113, 0.15)", color: "#F87171", label: "REJECT" },
 };
 
 interface Props {
@@ -18,11 +17,15 @@ interface Props {
 }
 
 export default function TierBadge({ tier, size = "md" }: Props) {
-  const { bg, text, label } = TIER_STYLES[tier];
-  const padding = size === "sm" ? "px-1.5 py-0.5 text-[10px]" : "px-2.5 py-1 text-xs";
-
+  const { bg, color, label } = TIER_CONFIG[tier];
   return (
-    <span className={`${bg} ${text} ${padding} rounded-full font-semibold tracking-wide`}>
+    <span
+      className={`
+        inline-block rounded font-semibold uppercase tracking-[0.08em] leading-none
+        ${size === "sm" ? "text-[10px] px-1.5 py-[3px]" : "text-[11px] px-2 py-[4px]"}
+      `}
+      style={{ backgroundColor: bg, color }}
+    >
       {label}
     </span>
   );

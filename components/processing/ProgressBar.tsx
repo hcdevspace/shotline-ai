@@ -1,6 +1,6 @@
-// ProgressBar — shows analyzed / total count with a smooth animated fill.
-// Receives current (processed so far) and total (surviving photos) as props.
-// Transitions the bar width with CSS for smooth live updates.
+// ProgressBar — 4px accent-filled track showing overall analysis progress.
+// Width transitions smoothly on each update (500ms ease-out).
+// Shows "N of total" count and a right-aligned percentage.
 
 interface Props {
   current: number;
@@ -12,15 +12,23 @@ export default function ProgressBar({ current, total }: Props) {
 
   return (
     <div className="w-full">
-      <div className="w-full bg-[var(--surface-raised)] rounded-full h-2 overflow-hidden">
+      {/* Track */}
+      <div className="w-full bg-edge rounded-full h-[4px] overflow-hidden">
         <div
-          className="bg-[var(--accent)] h-2 rounded-full transition-all duration-500 ease-out"
+          className="bg-accent h-full rounded-full transition-all duration-500 ease-out"
           style={{ width: `${pct}%` }}
         />
       </div>
-      <p className="text-sm text-[var(--text-secondary)] mt-2 text-center">
-        <span className="text-white font-medium">{current}</span> / {total} photos analyzed
-      </p>
+
+      {/* Labels */}
+      <div className="flex items-center justify-between mt-3">
+        <p className="text-[13px] text-mid">
+          <span className="text-hi font-semibold tabular-nums">{current}</span>
+          {" "}of{" "}
+          <span className="tabular-nums">{total}</span> analyzed
+        </p>
+        <p className="font-mono text-[11px] text-lo tabular-nums">{pct}%</p>
+      </div>
     </div>
   );
 }

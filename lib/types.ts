@@ -11,9 +11,10 @@ export interface AnalysisResult {
   id: string;
   score: number;          // 0–100
   tier: Tier;
-  tags: string[];
-  caption: string;
-  confidence: number;     // 0.0–1.0
+  tags: string[];         // quality_tags + organization_tags merged
+  caption: string;        // one sentence, present tense, social-media ready
+  confidence: number;     // 0.0–1.0 (score / 100)
+  reasoning: string;      // one sentence: primary factor driving the score
 }
 
 // Full photo object living in the Zustand store
