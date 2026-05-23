@@ -33,11 +33,46 @@ const MAX_DIM = 1024;
 const JPEG_QUALITY = 0.85;
 const CHUNK_SIZE = 8; // images processed in parallel per batch
 
+// ─── HEIC conversion ──────────────────────────────────────────────────────────
+
+const HEIC_EXTS = /\.(heic|heif)$/i;
+
+function isHeic(file: File): boolean {
+  return HEIC_EXTS.test(file.name) ||
+    file.type === "image/heic" ||
+    file.type === "image/heif";
+}
+
+// Converts a HEIC/HEIF file to a JPEG Blob using heic2any.
+// Returns null if conversion fails (browser unsupported, corrupt file, etc.).
+async function heicToJpeg(file: File): Promise<Blob | null> {
+  try {
+    // Dynamic import keeps heic2any out of the initial bundle
+    const heic2any = (await import("heic2any")).default;
+    const result = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.9 });
+    // heic2any returns Blob for single images, Blob[] for multi-frame
+    return Array.isArray(result) ? result[0] : result;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Compression ─────────────────────────────────────────────────────────────
 
 async function compressImage(file: File): Promise<UploadedImage | null> {
+  // Browsers (Chrome/Edge on Windows) can't decode HEIC natively.
+  // Convert to JPEG first so the Canvas API can process it.
+  let sourceFile = file;
+  if (isHeic(file)) {
+    const jpeg = await heicToJpeg(file);
+    if (!jpeg) return null;
+    sourceFile = new File([jpeg], file.name.replace(HEIC_EXTS, ".jpg"), {
+      type: "image/jpeg",
+    });
+  }
+
   return new Promise((resolve) => {
-    const objectUrl = URL.createObjectURL(file);
+    const objectUrl = URL.createObjectURL(sourceFile);
     const img = new Image();
 
     img.onload = () => {
@@ -46,7 +81,6 @@ async function compressImage(file: File): Promise<UploadedImage | null> {
       let w = img.naturalWidth;
       let h = img.naturalHeight;
 
-      // Downscale while preserving aspect ratio
       if (w > MAX_DIM || h > MAX_DIM) {
         const ratio = MAX_DIM / Math.max(w, h);
         w = Math.round(w * ratio);
@@ -68,8 +102,8 @@ async function compressImage(file: File): Promise<UploadedImage | null> {
 
       resolve({
         id: crypto.randomUUID(),
-        filename: file.name,
-        file,
+        filename: file.name,   // keep original filename (.heic) for display
+        file: sourceFile,      // JPEG blob — needed for ZIP export
         base64,
         width: w,
         height: h,
@@ -80,7 +114,7 @@ async function compressImage(file: File): Promise<UploadedImage | null> {
 
     img.onerror = () => {
       URL.revokeObjectURL(objectUrl);
-      resolve(null); // silently skip undecodable files
+      resolve(null);
     };
 
     img.src = objectUrl;
