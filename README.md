@@ -1,36 +1,75 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ShotlineAI
 
-## Getting Started
+AI-powered photo curation — instantly surface your best shots.
 
-First, run the development server:
+Upload a folder of photos and ShotlineAI ranks, tags, and captions every image using Gemini vision AI, grouping them into confidence tiers so you can export a clean library in seconds.
+
+## Tech Stack
+
+- **Next.js 15** (App Router)
+- **TypeScript**
+- **Tailwind CSS**
+- **Gemini 1.5 Flash** (Google AI vision)
+- **Zustand** (client-side state)
+- **JSZip** (client-side ZIP export)
+
+## Setup
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# 1. Install dependencies
+npm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Edit `.env.local` (already present in repo root):
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```env
+GEMINI_API_KEY=your_gemini_api_key_here
+NEXT_PUBLIC_MOCK_MODE=false
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Get a free Gemini API key at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey).
 
-## Learn More
+```bash
+# 2. Start the dev server
+npm run dev
+```
 
-To learn more about Next.js, take a look at the following resources:
+Open [http://localhost:3000](http://localhost:3000).
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Demo Mode (no API key required)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Set `NEXT_PUBLIC_MOCK_MODE=true` in `.env.local` to run with deterministic fake AI results.
+The full UI works — upload, processing animation, tier review, and ZIP export — with no network calls.
 
-## Deploy on Vercel
+```env
+NEXT_PUBLIC_MOCK_MODE=true
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Project Structure
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```
+app/
+  upload/          ← drag-and-drop photo selection
+  processing/      ← two-phase analysis pipeline (client preprocessing + AI)
+  results/         ← tier review, overrides, and ZIP export
+  api/analyze/     ← Gemini API proxy (keeps key server-side)
+
+components/
+  upload/          ← DropZone, FileSummary
+  processing/      ← StepIndicator, ProgressBar, LiveGrid
+  results/         ← PhotoGrid, PhotoCard, FilterBar, ExportButton
+  ui/              ← Navbar, TierBadge, ScoreBadge
+
+lib/               ← types, Zustand store, Gemini client
+utils/             ← preprocessing, mock data, analysis service, ZIP export
+hooks/             ← useUpload, usePhotoAnalysis
+```
+
+## Confidence Tiers
+
+| Tier | Score | Meaning |
+|---|---|---|
+| **Best** | 85–100 | Sharp, well-lit, compelling — export always |
+| **Keep** | 60–84 | Good photo with minor flaws |
+| **Uncertain** | 40–59 | Borderline — user reviews and overrides |
+| **Reject** | 0–39 | Blurry, dark, or technically failed |
